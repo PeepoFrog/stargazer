@@ -100,7 +100,7 @@ func readPixelsAsFloat64(img fitsio.Image, n int) ([]float64, error) {
 		return nil, fmt.Errorf("unsupported BITPIX=%d", bitpix)
 	}
 }
-func readFirst2DImage(path string) (GrayImage, error) {
+func ReadFirst2DImage(path string) (GrayImage, error) {
 	fh, err := os.Open(path)
 	if err != nil {
 		return GrayImage{}, err
@@ -156,22 +156,22 @@ func readFirst2DImage(path string) (GrayImage, error) {
 
 	return GrayImage{}, errors.New("no 2D image HDU found")
 }
-func mustRenderAndSave(
+func MustRenderAndSave(
 	materialized materialize.Result,
 	preset Preset,
 	layout outputlayout.Layout,
 ) {
-	redImg, err := readFirst2DImage(materialized.Files["red"])
+	redImg, err := ReadFirst2DImage(materialized.Files["red"])
 	if err != nil {
 		log.Fatalf("read red fits: %v", err)
 	}
 
-	greenImg, err := readFirst2DImage(materialized.Files["green"])
+	greenImg, err := ReadFirst2DImage(materialized.Files["green"])
 	if err != nil {
 		log.Fatalf("read green fits: %v", err)
 	}
 
-	blueImg, err := readFirst2DImage(materialized.Files["blue"])
+	blueImg, err := ReadFirst2DImage(materialized.Files["blue"])
 	if err != nil {
 		log.Fatalf("read blue fits: %v", err)
 	}
