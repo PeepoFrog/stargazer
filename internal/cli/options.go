@@ -2,6 +2,7 @@ package cli
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"strings"
 )
@@ -9,8 +10,8 @@ import (
 type Options struct {
 	Source string
 
-	Target          string
-	TargetNameExact string
+	Target     string
+	SearchMode string
 
 	RadiusDeg float64
 	OutDir    string
@@ -38,8 +39,8 @@ type Options struct {
 func MustParseOptions() Options {
 	source := flag.String("source", "", "required: jwst or hst")
 
-	target := flag.String("target", "", "resolvable object name, e.g. 'NGC 6720'")
-	targetNameExact := flag.String("target-name-exact", "", "exact MAST target_name to search without name resolving")
+	target := flag.String("target", "", "object name or target label, e.g. 'NGC 3132'")
+	searchMode := flag.String("search-mode", "auto", "search mode: auto, exact, position")
 
 	radiusDeg := flag.Float64("radius", 0.03, "search radius in degrees")
 	outDir := flag.String("out", "./cli_output", "output directory")
@@ -68,8 +69,8 @@ func MustParseOptions() Options {
 	opts := Options{
 		Source: strings.TrimSpace(*source),
 
-		Target:          strings.TrimSpace(*target),
-		TargetNameExact: strings.TrimSpace(*targetNameExact),
+		Target:     strings.TrimSpace(*target),
+		SearchMode: normalizeSearchMode(*searchMode),
 
 		RadiusDeg: *radiusDeg,
 		OutDir:    *outDir,
@@ -104,25 +105,38 @@ func validateOrExit(opts Options) {
 		log.Fatal("please specify -source jwst or -source hst")
 	}
 
-	if opts.Target == "" && opts.TargetNameExact == "" {
-		log.Fatal("missing required target: use either -target or -target-name-exact")
+	if opts.Target == "" {
+		log.Fatal("missing required target: use -target")
 	}
 
-	if opts.Target != "" && opts.TargetNameExact != "" {
-		log.Fatal("use only one of -target or -target-name-exact")
+	switch opts.SearchMode {
+	case "auto", "exact", "position":
+	default:
+		log.Fatalf("invalid -search-mode %q (expected auto, exact, or position)", opts.SearchMode)
 	}
 }
 
 func (o Options) SearchInput() string {
-	if o.TargetNameExact != "" {
-		return o.TargetNameExact
-	}
 	return o.Target
 }
 
-func (o Options) SearchMode() string {
-	if o.TargetNameExact != "" {
-		return "target_name_exact"
+func normalizeSearchMode(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return "auto"
 	}
-	return "resolved_name"
+	return v
+}
+
+func (o Options) SearchModeLabel() string {
+	switch o.SearchMode {
+	case "auto":
+		return "auto_exact_then_position_merge"
+	case "exact":
+		return "target_name_exact_only"
+	case "position":
+		return "resolved_position_only"
+	default:
+		return fmt.Sprintf("unknown(%s)", o.SearchMode)
+	}
 }

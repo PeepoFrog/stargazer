@@ -11,7 +11,7 @@ type Layout struct {
 	BaseName     string
 	FitsDir      string
 	RenderDir    string
-	PNGPath      string
+	ImagePath    string
 	MetadataPath string
 }
 
@@ -67,7 +67,7 @@ func Build(outDir, sourceName, targetName, presetName string) Layout {
 		BaseName:     baseName,
 		FitsDir:      filepath.Join(renderDir, "fits"),
 		RenderDir:    renderDir,
-		PNGPath:      filepath.Join(renderDir, baseName+"_"+SafeFileName(presetName)+".png"),
+		ImagePath:    filepath.Join(renderDir, baseName+"_"+SafeFileName(presetName)+".png"),
 		MetadataPath: filepath.Join(renderDir, baseName+"_"+SafeFileName(presetName)+"_metadata.json"),
 	}
 }

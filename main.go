@@ -1,6 +1,8 @@
 package main
 
 import (
+	"log"
+
 	"github.com/PeepFrog/datastsciparser/internal/cli"
 	"github.com/PeepFrog/datastsciparser/internal/clients"
 	"github.com/PeepFrog/datastsciparser/internal/downloader"
@@ -27,7 +29,7 @@ func main() {
 	clientSet := clients.New()
 	preset := presetflow.Build(opts)
 
-	searchResult := searchflow.MustResolveAndSearch(
+	searchResult := searchflow.MustSearch(
 		clientSet.Meta,
 		cfg,
 		opts,
@@ -61,12 +63,11 @@ func main() {
 	)
 
 	renderflow.MustRenderAndSave(materialized, preset, layout)
+	log.Printf("Saved image: %s", layout.ImagePath)
 
 	meta := metadataflow.Build(
 		searchResult,
-		best.TargetName,
-		best.SelectionMode,
-		best.ProductKind,
+		best,
 		preset,
 		materialized,
 		layout,
@@ -75,4 +76,5 @@ func main() {
 	)
 
 	metadataflow.MustWriteJSON(layout.MetadataPath, meta)
+	log.Printf("Saved metadata: %s", layout.MetadataPath)
 }

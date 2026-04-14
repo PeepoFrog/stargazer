@@ -194,7 +194,7 @@ func MustRenderAndSave(
 		log.Fatalf("render preset: %v", err)
 	}
 
-	if err := SavePNG(layout.PNGPath, img); err != nil {
+	if err := SavePNG(layout.ImagePath, img); err != nil {
 		log.Fatalf("save png: %v", err)
 	}
 }
