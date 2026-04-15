@@ -41,7 +41,7 @@ func MustChooseBest(
 	allowSingleFilter bool,
 	debug bool,
 ) GroupCandidate {
-	best, err := ChooseBestRGBSet(
+	best, err := ChooseBest(
 		rows,
 		inputTarget,
 		cfg,
@@ -50,7 +50,7 @@ func MustChooseBest(
 		debug,
 	)
 	if err != nil {
-		log.Fatalf("choose best rgb set: %v", err)
+		panic(fmt.Errorf("choose best rgb set: %w", err))
 	}
 
 	log.Printf(
@@ -68,7 +68,7 @@ func MustChooseBest(
 	return best
 }
 
-func ChooseBestRGBSet(
+func ChooseBest(
 	rows []map[string]any,
 	inputTarget string,
 	cfg rgb_configs.SourceConfig,
@@ -188,6 +188,25 @@ func ChooseBestRGBSet(
 	})
 
 	return candidates[0], nil
+}
+
+// compatibility wrapper, якщо десь ще лишився старий виклик
+func ChooseBestRGBSet(
+	rows []map[string]any,
+	inputTarget string,
+	cfg rgb_configs.SourceConfig,
+	allowCalFits bool,
+	allowSingleFilter bool,
+	debug bool,
+) (GroupCandidate, error) {
+	return ChooseBest(
+		rows,
+		inputTarget,
+		cfg,
+		allowCalFits,
+		allowSingleFilter,
+		debug,
+	)
 }
 
 func LogTargetRowsSummary(rows []map[string]any, inputTarget string, cfg rgb_configs.SourceConfig, allowCalFits bool) {
