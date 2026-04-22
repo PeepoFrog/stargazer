@@ -242,6 +242,8 @@ func buildCandidateRecord(
 		Source:           strings.ToLower(strings.TrimSpace(source)),
 		TargetName:       targetName,
 		TargetNameNorm:   normalizeNameForSearch(targetName),
+		ObservationKey:   strings.TrimSpace(best.ObservationKey),
+		ObservationID:    strings.TrimSpace(best.ObservationID),
 		RowsCount:        len(rawRows),
 		FiltersCSV:       strings.Join(collectDistinctFilters(rawRows), ","),
 		Quality:          qualityLabel(best),

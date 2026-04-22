@@ -23,6 +23,8 @@ type ChannelSelection struct {
 
 type GroupCandidate struct {
 	TargetName       string
+	ObservationKey   string
+	ObservationID    string
 	Files            map[string]map[string]any
 	Channels         map[string]ChannelSelection
 	AvgDist          float64
@@ -31,6 +33,13 @@ type GroupCandidate struct {
 	DuplicatePenalty float64
 	SelectionMode    string
 	ProductKind      string
+}
+
+type observationGroup struct {
+	TargetName     string
+	ObservationKey string
+	ObservationID  string
+	Files          map[string]map[string]any
 }
 
 func MustChooseBest(
@@ -54,8 +63,9 @@ func MustChooseBest(
 	}
 
 	log.Printf(
-		"Selected target group=%q score=%.2f avg_distance=%.3f mode=%s product_kind=%s R=%s G=%s B=%s",
+		"Selected target=%q observation=%q score=%.2f avg_distance=%.3f mode=%s product_kind=%s R=%s G=%s B=%s",
 		best.TargetName,
+		best.ObservationID,
 		best.Score,
 		best.AvgDist,
 		best.SelectionMode,
@@ -79,97 +89,135 @@ func ChooseBest(
 	wantedFilters := map[string]bool{}
 	for _, spec := range cfg.RGBSpecs {
 		for _, filterName := range spec.PreferredFilters {
-			wantedFilters[filterName] = true
+			token := normalizeFilterToken(filterName)
+			if token != "" {
+				wantedFilters[token] = true
+			}
 		}
 	}
 
-	groups := map[string]*GroupCandidate{}
+	targetGroups := map[string]map[string]*observationGroup{}
+
 	for _, row := range rows {
-		filterName := strings.ToUpper(strings.TrimSpace(asString(row["filters"])))
 		dataURL := strings.TrimSpace(asString(row["dataURL"]))
 		targetName := strings.TrimSpace(asString(row["target_name"]))
 		productKind := acceptedProductKind(cfg, dataURL, allowCalFits)
 
-		if !wantedFilters[filterName] {
-			if debug {
-				log.Printf("Skipping row target=%q filter=%q: unsupported filter", targetName, filterName)
-			}
-			continue
-		}
-
 		if productKind == "" {
 			if debug {
-				log.Printf("Skipping row target=%q filter=%q: dataURL is not accepted (%q)", targetName, filterName, dataURL)
+				log.Printf("Skipping row target=%q filters=%q: dataURL is not accepted (%q)", targetName, asString(row["filters"]), dataURL)
 			}
 			continue
 		}
 
 		if targetName == "" {
 			if debug {
-				log.Printf("Skipping row with filter=%q: empty target_name", filterName)
+				log.Printf("Skipping row with filters=%q: empty target_name", asString(row["filters"]))
 			}
 			continue
 		}
 
-		g, ok := groups[targetName]
-		if !ok {
-			g = &GroupCandidate{
-				TargetName: targetName,
-				Files:      map[string]map[string]any{},
+		observationKey := compatibilityGroupKey(cfg, row)
+		if observationKey == "" {
+			if debug {
+				log.Printf("Skipping row target=%q filters=%q: no observation compatibility key", targetName, asString(row["filters"]))
 			}
-			groups[targetName] = g
+			continue
 		}
 
-		current, exists := g.Files[filterName]
-		if !exists || betterRow(row, current, cfg, allowCalFits) {
-			g.Files[filterName] = row
+		matchedFilters := matchedRequestedFilters(row, wantedFilters)
+		if len(matchedFilters) == 0 {
+			if debug {
+				log.Printf("Skipping row target=%q filters=%q: no requested filter match", targetName, asString(row["filters"]))
+			}
+			continue
+		}
+
+		observationID := observationDisplayID(cfg, row)
+
+		perTarget, ok := targetGroups[targetName]
+		if !ok {
+			perTarget = map[string]*observationGroup{}
+			targetGroups[targetName] = perTarget
+		}
+
+		grp, ok := perTarget[observationKey]
+		if !ok {
+			grp = &observationGroup{
+				TargetName:     targetName,
+				ObservationKey: observationKey,
+				ObservationID:  observationID,
+				Files:          map[string]map[string]any{},
+			}
+			perTarget[observationKey] = grp
+		}
+
+		for _, matchedFilter := range matchedFilters {
+			current, exists := grp.Files[matchedFilter]
+			if !exists || betterRowForMatchedFilter(row, current, matchedFilter, cfg, allowCalFits) {
+				grp.Files[matchedFilter] = row
+			}
 		}
 	}
 
 	var candidates []GroupCandidate
-	for _, g := range groups {
-		channels, fallbackPenalty, duplicatePenalty, calibSum, distSum, selectionMode, productKind, ok :=
-			selectRGBChannels(g.Files, cfg, allowCalFits, allowSingleFilter)
-		if !ok {
-			continue
-		}
 
-		g.Channels = channels
-		g.AvgDist = distSum / 3.0
-		g.FallbackPenalty = fallbackPenalty
-		g.DuplicatePenalty = duplicatePenalty
-		g.SelectionMode = selectionMode
-		g.ProductKind = productKind
+	for _, perTarget := range targetGroups {
+		for _, grp := range perTarget {
+			channels, fallbackPenalty, duplicatePenalty, calibSum, distSum, selectionMode, productKind, ok :=
+				selectRGBChannels(grp.Files, cfg, allowCalFits, allowSingleFilter)
+			if !ok {
+				continue
+			}
 
-		score := 3000.0 + calibSum*10.0 - g.AvgDist - fallbackPenalty - duplicatePenalty
-		score -= productKindPenalty(productKind)
-		if selectionMode == "single_filter_fallback" {
-			score -= 600.0
-		}
+			avgDist := distSum / 3.0
+			score := 3000.0 + calibSum*10.0 - avgDist - fallbackPenalty - duplicatePenalty
+			score -= productKindPenalty(productKind)
 
-		if normalizedName(g.TargetName) == normalizedName(inputTarget) {
-			score += 500.0
-		} else if strings.Contains(normalizedName(g.TargetName), normalizedName(inputTarget)) ||
-			strings.Contains(normalizedName(inputTarget), normalizedName(g.TargetName)) {
-			score += 250.0
-		}
-		if !strings.Contains(strings.ToUpper(g.TargetName), "POSITION") &&
-			!strings.Contains(strings.ToUpper(g.TargetName), "MRS") {
-			score += 75.0
-		}
+			if selectionMode == "single_filter_fallback" {
+				score -= 600.0
+			}
 
-		g.Score = score
-		candidates = append(candidates, *g)
+			if normalizedName(grp.TargetName) == normalizedName(inputTarget) {
+				score += 500.0
+			} else if strings.Contains(normalizedName(grp.TargetName), normalizedName(inputTarget)) ||
+				strings.Contains(normalizedName(inputTarget), normalizedName(grp.TargetName)) {
+				score += 250.0
+			}
+
+			if !strings.Contains(strings.ToUpper(grp.TargetName), "POSITION") &&
+				!strings.Contains(strings.ToUpper(grp.TargetName), "MRS") {
+				score += 75.0
+			}
+
+			if strings.TrimSpace(grp.ObservationID) != "" {
+				score += 15.0
+			}
+
+			candidates = append(candidates, GroupCandidate{
+				TargetName:       grp.TargetName,
+				ObservationKey:   grp.ObservationKey,
+				ObservationID:    grp.ObservationID,
+				Files:            grp.Files,
+				Channels:         channels,
+				AvgDist:          avgDist,
+				Score:            score,
+				FallbackPenalty:  fallbackPenalty,
+				DuplicatePenalty: duplicatePenalty,
+				SelectionMode:    selectionMode,
+				ProductKind:      productKind,
+			})
+		}
 	}
 
 	if len(candidates) == 0 {
 		msg := "no usable RGB set found"
 		if allowCalFits && allowSingleFilter {
-			msg += " (checked _i2d.fits, _cal.fits, and single-filter fallback)"
+			msg += " (checked observation-compatible _i2d.fits, _cal.fits, and single-filter fallback)"
 		} else if allowCalFits {
-			msg += " (checked _i2d.fits and _cal.fits)"
+			msg += " (checked observation-compatible _i2d.fits and _cal.fits)"
 		} else {
-			msg += " (checked _i2d.fits only)"
+			msg += " (checked observation-compatible _i2d.fits only)"
 		}
 		return GroupCandidate{}, errors.New(msg)
 	}
@@ -178,6 +226,12 @@ func ChooseBest(
 		if candidates[i].Score == candidates[j].Score {
 			if candidates[i].FallbackPenalty == candidates[j].FallbackPenalty {
 				if candidates[i].DuplicatePenalty == candidates[j].DuplicatePenalty {
+					if candidates[i].AvgDist == candidates[j].AvgDist {
+						if candidates[i].TargetName == candidates[j].TargetName {
+							return candidates[i].ObservationID < candidates[j].ObservationID
+						}
+						return candidates[i].TargetName < candidates[j].TargetName
+					}
 					return candidates[i].AvgDist < candidates[j].AvgDist
 				}
 				return candidates[i].DuplicatePenalty < candidates[j].DuplicatePenalty
@@ -190,7 +244,6 @@ func ChooseBest(
 	return candidates[0], nil
 }
 
-// compatibility wrapper, якщо десь ще лишився старий виклик
 func ChooseBestRGBSet(
 	rows []map[string]any,
 	inputTarget string,
@@ -199,14 +252,7 @@ func ChooseBestRGBSet(
 	allowSingleFilter bool,
 	debug bool,
 ) (GroupCandidate, error) {
-	return ChooseBest(
-		rows,
-		inputTarget,
-		cfg,
-		allowCalFits,
-		allowSingleFilter,
-		debug,
-	)
+	return ChooseBest(rows, inputTarget, cfg, allowCalFits, allowSingleFilter, debug)
 }
 
 func LogTargetRowsSummary(rows []map[string]any, inputTarget string, cfg rgb_configs.SourceConfig, allowCalFits bool) {
@@ -222,35 +268,41 @@ func LogTargetRowsSummary(rows []map[string]any, inputTarget string, cfg rgb_con
 
 	perFilter := map[string]*stat{}
 	targetNames := map[string]int{}
+	observationKeys := map[string]int{}
 
 	for _, row := range rows {
-		filterName := strings.ToUpper(strings.TrimSpace(asString(row["filters"])))
-		targetName := strings.TrimSpace(asString(row["target_name"]))
 		dataURL := strings.TrimSpace(asString(row["dataURL"]))
 		lower := strings.ToLower(dataURL)
+		targetName := strings.TrimSpace(asString(row["target_name"]))
 
 		if targetName != "" {
 			targetNames[targetName]++
 		}
 
-		s, ok := perFilter[filterName]
-		if !ok {
-			s = &stat{}
-			perFilter[filterName] = s
+		if key := compatibilityGroupKey(cfg, row); key != "" {
+			observationKeys[key]++
 		}
-		s.Count++
 
-		if dataURL != "" {
-			s.WithURL++
-		}
-		if strings.HasSuffix(lower, "_i2d.fits") {
-			s.I2DCount++
-		}
-		if strings.HasSuffix(lower, "_cal.fits") {
-			s.CalCount++
-		}
-		if acceptedProductKind(cfg, dataURL, allowCalFits) != "" {
-			s.AcceptedCount++
+		for _, token := range parseFilterTokens(asString(row["filters"])) {
+			s, ok := perFilter[token]
+			if !ok {
+				s = &stat{}
+				perFilter[token] = s
+			}
+			s.Count++
+
+			if dataURL != "" {
+				s.WithURL++
+			}
+			if strings.HasSuffix(lower, "_i2d.fits") {
+				s.I2DCount++
+			}
+			if strings.HasSuffix(lower, "_cal.fits") {
+				s.CalCount++
+			}
+			if acceptedProductKind(cfg, dataURL, allowCalFits) != "" {
+				s.AcceptedCount++
+			}
 		}
 	}
 
@@ -264,6 +316,8 @@ func LogTargetRowsSummary(rows []map[string]any, inputTarget string, cfg rgb_con
 	for name, n := range targetNames {
 		log.Printf("  target_name=%q rows=%d", name, n)
 	}
+
+	log.Printf("Debug observation groups found (%d unique)", len(observationKeys))
 
 	log.Printf("Debug per-filter summary:")
 	for _, f := range filters {
@@ -403,9 +457,10 @@ func buildChannelSelections(
 ) []ChannelSelection {
 	var out []ChannelSelection
 	seen := map[string]bool{}
-	requested := spec.PreferredFilters[0]
+	requested := normalizeFilterToken(spec.PreferredFilters[0])
 
 	for idx, filterName := range spec.PreferredFilters {
+		filterName = normalizeFilterToken(filterName)
 		if seen[filterName] {
 			continue
 		}
@@ -455,6 +510,21 @@ func bestSingleFilterRow(
 	return bestFilter, bestRow, true
 }
 
+func betterRowForMatchedFilter(
+	a, b map[string]any,
+	targetFilter string,
+	cfg rgb_configs.SourceConfig,
+	allowCalFits bool,
+) bool {
+	matchA := filterMatchSpecificity(a, targetFilter)
+	matchB := filterMatchSpecificity(b, targetFilter)
+	if matchA != matchB {
+		return matchA > matchB
+	}
+
+	return betterRow(a, b, cfg, allowCalFits)
+}
+
 func betterRow(a, b map[string]any, cfg rgb_configs.SourceConfig, allowCalFits bool) bool {
 	kindA := acceptedProductKind(cfg, asString(a["dataURL"]), allowCalFits)
 	kindB := acceptedProductKind(cfg, asString(b["dataURL"]), allowCalFits)
@@ -477,9 +547,88 @@ func betterRow(a, b map[string]any, cfg rgb_configs.SourceConfig, allowCalFits b
 		return areaA > areaB
 	}
 
+	expA := asFloat(a["t_exptime"])
+	expB := asFloat(b["t_exptime"])
+	if expA != expB {
+		return expA > expB
+	}
+
 	distA := asFloat(a["distance"])
 	distB := asFloat(b["distance"])
 	return distA < distB
+}
+
+func filterMatchSpecificity(row map[string]any, targetFilter string) int {
+	targetFilter = normalizeFilterToken(targetFilter)
+	if targetFilter == "" {
+		return 0
+	}
+
+	tokens := parseFilterTokens(asString(row["filters"]))
+	if len(tokens) == 1 && tokens[0] == targetFilter {
+		return 3
+	}
+
+	for _, token := range tokens {
+		if token == targetFilter {
+			return 2
+		}
+	}
+
+	return 0
+}
+
+func matchedRequestedFilters(row map[string]any, wantedFilters map[string]bool) []string {
+	seen := map[string]bool{}
+	var out []string
+
+	for _, token := range parseFilterTokens(asString(row["filters"])) {
+		if !wantedFilters[token] {
+			continue
+		}
+		if seen[token] {
+			continue
+		}
+		seen[token] = true
+		out = append(out, token)
+	}
+
+	sort.Strings(out)
+	return out
+}
+
+func parseFilterTokens(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ';' || r == ','
+	})
+
+	seen := map[string]bool{}
+	var out []string
+	for _, part := range parts {
+		token := normalizeFilterToken(part)
+		if token == "" {
+			continue
+		}
+		if token == "N/A" || token == "NONE" {
+			continue
+		}
+		if seen[token] {
+			continue
+		}
+		seen[token] = true
+		out = append(out, token)
+	}
+
+	return out
+}
+
+func normalizeFilterToken(s string) string {
+	return strings.ToUpper(strings.TrimSpace(s))
 }
 
 func acceptedProductKind(cfg rgb_configs.SourceConfig, dataURL string, allowCalFits bool) string {
@@ -551,8 +700,9 @@ func productKindPenalty(kind string) float64 {
 }
 
 func indexOfPreferredFilter(filters []string, actual string) int {
+	actual = normalizeFilterToken(actual)
 	for i, f := range filters {
-		if strings.EqualFold(strings.TrimSpace(f), strings.TrimSpace(actual)) {
+		if normalizeFilterToken(f) == actual {
 			return i
 		}
 	}
@@ -562,7 +712,7 @@ func indexOfPreferredFilter(filters []string, actual string) int {
 func uniqueFilterCount(filters ...string) int {
 	seen := map[string]bool{}
 	for _, f := range filters {
-		f = strings.TrimSpace(f)
+		f = normalizeFilterToken(f)
 		if f == "" {
 			continue
 		}
@@ -574,7 +724,7 @@ func uniqueFilterCount(filters ...string) int {
 func duplicateFilterPenalty(filters ...string) float64 {
 	counts := map[string]int{}
 	for _, f := range filters {
-		f = strings.TrimSpace(f)
+		f = normalizeFilterToken(f)
 		if f == "" {
 			continue
 		}
@@ -605,6 +755,7 @@ func normalizeKey(s string) string {
 	s = strings.ReplaceAll(s, " ", "")
 	s = strings.ReplaceAll(s, "-", "")
 	s = strings.ReplaceAll(s, "_", "")
+	s = strings.ReplaceAll(s, "/", "")
 	return s
 }
 
@@ -625,6 +776,150 @@ func rowShapeKey(row map[string]any) string {
 		return fmt.Sprintf("%dx%d", w, h)
 	}
 	return ""
+}
+
+func compatibilityGroupKey(cfg rgb_configs.SourceConfig, row map[string]any) string {
+	switch strings.ToLower(strings.TrimSpace(cfg.Name)) {
+	case "jwst":
+		return jwstCompatibilityKey(row)
+	case "hst":
+		return hstObservationGroupKey(row)
+	default:
+		return ""
+	}
+}
+
+func observationDisplayID(cfg rgb_configs.SourceConfig, row map[string]any) string {
+	switch strings.ToLower(strings.TrimSpace(cfg.Name)) {
+	case "jwst":
+		if v := firstNonEmptyField(row,
+			"obs_id",
+			"obsid",
+			"observation_id",
+			"observationid",
+			"obsID",
+			"observationID",
+		); v != "" {
+			return jwstFamilyDisplay(v)
+		}
+		if base := jwstBaseFileName(row); base != "" {
+			return jwstFamilyDisplay(base)
+		}
+		return ""
+	case "hst":
+		if v := firstNonEmptyField(row,
+			"obs_id",
+			"obsid",
+			"observation_id",
+			"observationid",
+			"obsID",
+			"observationID",
+		); v != "" {
+			return v
+		}
+		return hstFileFamilyKey(row)
+	default:
+		return ""
+	}
+}
+
+func firstNonEmptyField(row map[string]any, keys ...string) string {
+	for _, key := range keys {
+		v := strings.TrimSpace(asString(row[key]))
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func jwstCompatibilityKey(row map[string]any) string {
+	if v := firstNonEmptyField(row,
+		"obs_id",
+		"observation_id",
+		"obsID",
+		"observationID",
+	); v != "" {
+		return jwstFamilyKey(v, asString(row["instrument_name"]))
+	}
+
+	if base := jwstBaseFileName(row); base != "" {
+		return jwstFamilyKey(base, asString(row["instrument_name"]))
+	}
+
+	return ""
+}
+
+func jwstFamilyKey(raw string, instrumentName string) string {
+	display := jwstFamilyDisplay(raw)
+	if display == "" {
+		return ""
+	}
+
+	key := normalizeKey(display)
+
+	parts := strings.Split(display, "_")
+	if len(parts) >= 3 && containsLetters(parts[2]) {
+		return key
+	}
+
+	inst := normalizeKey(instrumentName)
+	if inst == "" {
+		return key
+	}
+
+	return key + "|" + inst
+}
+
+func jwstFamilyDisplay(raw string) string {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return ""
+	}
+
+	base := raw
+	if slash := strings.LastIndex(base, "/"); slash >= 0 {
+		base = base[slash+1:]
+	}
+	base = strings.TrimSuffix(base, ".fits")
+	base = strings.TrimSuffix(base, ".json")
+	base = strings.TrimSuffix(base, ".jpg")
+	base = strings.TrimSuffix(base, ".csv")
+
+	parts := strings.Split(base, "_")
+	if len(parts) >= 3 {
+		return strings.Join(parts[:3], "_")
+	}
+	if len(parts) >= 2 {
+		return strings.Join(parts[:2], "_")
+	}
+	return base
+}
+
+func containsLetters(s string) bool {
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			return true
+		}
+	}
+	return false
+}
+
+func jwstBaseFileName(row map[string]any) string {
+	base := strings.ToLower(strings.TrimSpace(asString(row["dataURL"])))
+	if base == "" {
+		return ""
+	}
+
+	if slash := strings.LastIndex(base, "/"); slash >= 0 {
+		base = base[slash+1:]
+	}
+
+	base = strings.TrimSuffix(base, ".fits")
+	for _, suffix := range []string{"_i2d", "_cal", "_rate", "_rateints", "_uncal", "_crf"} {
+		base = strings.TrimSuffix(base, suffix)
+	}
+	return base
 }
 
 func hstCompatibilityKey(row map[string]any) string {
@@ -679,33 +974,35 @@ func hstFileFamilyKey(row map[string]any) string {
 	return first
 }
 
-func rowsCompatibleForRGB(cfg rgb_configs.SourceConfig, rows ...map[string]any) bool {
-	if strings.ToLower(strings.TrimSpace(cfg.Name)) != "hst" {
-		return true
-	}
+func hstObservationGroupKey(row map[string]any) string {
+	metaKey := hstCompatibilityKey(row)
+	familyKey := hstFileFamilyKey(row)
 
-	var firstMetaKey string
-	var firstFamilyKey string
+	switch {
+	case metaKey != "" && familyKey != "":
+		return metaKey + "|" + familyKey
+	case metaKey != "":
+		return metaKey
+	case familyKey != "":
+		return familyKey
+	default:
+		return ""
+	}
+}
+
+func rowsCompatibleForRGB(cfg rgb_configs.SourceConfig, rows ...map[string]any) bool {
+	var firstKey string
 
 	for _, row := range rows {
-		metaKey := hstCompatibilityKey(row)
-		familyKey := hstFileFamilyKey(row)
-
-		if metaKey == "" && familyKey == "" {
+		key := compatibilityGroupKey(cfg, row)
+		if key == "" {
 			return false
 		}
-
-		if firstMetaKey == "" && metaKey != "" {
-			firstMetaKey = metaKey
+		if firstKey == "" {
+			firstKey = key
+			continue
 		}
-		if firstFamilyKey == "" && familyKey != "" {
-			firstFamilyKey = familyKey
-		}
-
-		if firstMetaKey != "" && metaKey != "" && metaKey != firstMetaKey {
-			return false
-		}
-		if firstFamilyKey != "" && familyKey != "" && familyKey != firstFamilyKey {
+		if key != firstKey {
 			return false
 		}
 	}
@@ -742,6 +1039,8 @@ func asString(v any) string {
 	switch t := v.(type) {
 	case string:
 		return t
+	case []byte:
+		return string(t)
 	case nil:
 		return ""
 	default:

@@ -36,6 +36,8 @@ type CandidateRecord struct {
 	Source           string
 	TargetName       string
 	TargetNameNorm   string
+	ObservationKey   string
+	ObservationID    string
 	RowsCount        int
 	FiltersCSV       string
 	Quality          string
@@ -149,6 +151,8 @@ CREATE TABLE IF NOT EXISTS catalog_candidates (
 	source TEXT NOT NULL,
 	target_name TEXT NOT NULL,
 	target_name_norm TEXT NOT NULL,
+	observation_key TEXT NOT NULL,
+	observation_id TEXT NOT NULL,
 	rows_count INTEGER NOT NULL,
 	filters_csv TEXT NOT NULL,
 	quality TEXT NOT NULL,
@@ -179,6 +183,10 @@ ON catalog_candidates(source, target_name_norm);
 		`
 CREATE INDEX IF NOT EXISTS idx_catalog_candidates_source_quality
 ON catalog_candidates(source, quality);
+`,
+		`
+CREATE INDEX IF NOT EXISTS idx_catalog_candidates_source_observation_id
+ON catalog_candidates(source, observation_id);
 `,
 	}
 
@@ -301,6 +309,8 @@ INSERT INTO catalog_candidates(
 	source,
 	target_name,
 	target_name_norm,
+	observation_key,
+	observation_id,
 	rows_count,
 	filters_csv,
 	quality,
@@ -318,9 +328,11 @@ INSERT INTO catalog_candidates(
 	blue_data_url,
 	updated_at
 )
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(source, target_name) DO UPDATE SET
 	target_name_norm = excluded.target_name_norm,
+	observation_key = excluded.observation_key,
+	observation_id = excluded.observation_id,
 	rows_count = excluded.rows_count,
 	filters_csv = excluded.filters_csv,
 	quality = excluded.quality,
@@ -341,6 +353,8 @@ ON CONFLICT(source, target_name) DO UPDATE SET
 		r.Source,
 		r.TargetName,
 		r.TargetNameNorm,
+		r.ObservationKey,
+		r.ObservationID,
 		r.RowsCount,
 		r.FiltersCSV,
 		r.Quality,
