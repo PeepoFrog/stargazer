@@ -48,6 +48,8 @@ type CandidateRecord struct {
 	FallbackPenalty  float64
 	DuplicatePenalty float64
 
+	TargetClassification string
+
 	RedFilter   string
 	GreenFilter string
 	BlueFilter  string
@@ -151,6 +153,7 @@ CREATE TABLE IF NOT EXISTS catalog_candidates (
 	source TEXT NOT NULL,
 	target_name TEXT NOT NULL,
 	target_name_norm TEXT NOT NULL,
+	target_classification TEXT NOT NULL,
 	observation_key TEXT NOT NULL,
 	observation_id TEXT NOT NULL,
 	rows_count INTEGER NOT NULL,
@@ -309,6 +312,7 @@ INSERT INTO catalog_candidates(
 	source,
 	target_name,
 	target_name_norm,
+	target_classification,
 	observation_key,
 	observation_id,
 	rows_count,
@@ -328,9 +332,10 @@ INSERT INTO catalog_candidates(
 	blue_data_url,
 	updated_at
 )
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(source, target_name) DO UPDATE SET
 	target_name_norm = excluded.target_name_norm,
+	target_classification = excluded.target_classification,
 	observation_key = excluded.observation_key,
 	observation_id = excluded.observation_id,
 	rows_count = excluded.rows_count,
@@ -353,6 +358,7 @@ ON CONFLICT(source, target_name) DO UPDATE SET
 		r.Source,
 		r.TargetName,
 		r.TargetNameNorm,
+		r.TargetClassification,
 		r.ObservationKey,
 		r.ObservationID,
 		r.RowsCount,

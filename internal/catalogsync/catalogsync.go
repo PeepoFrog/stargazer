@@ -239,30 +239,69 @@ func buildCandidateRecord(
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	return catalogdb.CandidateRecord{
-		Source:           strings.ToLower(strings.TrimSpace(source)),
-		TargetName:       targetName,
-		TargetNameNorm:   normalizeNameForSearch(targetName),
-		ObservationKey:   strings.TrimSpace(best.ObservationKey),
-		ObservationID:    strings.TrimSpace(best.ObservationID),
-		RowsCount:        len(rawRows),
-		FiltersCSV:       strings.Join(collectDistinctFilters(rawRows), ","),
-		Quality:          qualityLabel(best),
-		SelectionMode:    best.SelectionMode,
-		ProductKind:      best.ProductKind,
-		Score:            best.Score,
-		AvgDist:          best.AvgDist,
-		FallbackPenalty:  best.FallbackPenalty,
-		DuplicatePenalty: best.DuplicatePenalty,
-		RedFilter:        channelFilter(best, "red"),
-		GreenFilter:      channelFilter(best, "green"),
-		BlueFilter:       channelFilter(best, "blue"),
-		RedDataURL:       channelDataURL(best, "red"),
-		GreenDataURL:     channelDataURL(best, "green"),
-		BlueDataURL:      channelDataURL(best, "blue"),
-		UpdatedAt:        now,
+		Source:               strings.ToLower(strings.TrimSpace(source)),
+		TargetName:           targetName,
+		TargetNameNorm:       normalizeNameForSearch(targetName),
+		TargetClassification: extractTargetClassification(best, rawRows),
+		ObservationKey:       strings.TrimSpace(best.ObservationKey),
+		ObservationID:        strings.TrimSpace(best.ObservationID),
+		RowsCount:            len(rawRows),
+		FiltersCSV:           strings.Join(collectDistinctFilters(rawRows), ","),
+		Quality:              qualityLabel(best),
+		SelectionMode:        best.SelectionMode,
+		ProductKind:          best.ProductKind,
+		Score:                best.Score,
+		AvgDist:              best.AvgDist,
+		FallbackPenalty:      best.FallbackPenalty,
+		DuplicatePenalty:     best.DuplicatePenalty,
+		RedFilter:            channelFilter(best, "red"),
+		GreenFilter:          channelFilter(best, "green"),
+		BlueFilter:           channelFilter(best, "blue"),
+		RedDataURL:           channelDataURL(best, "red"),
+		GreenDataURL:         channelDataURL(best, "green"),
+		BlueDataURL:          channelDataURL(best, "blue"),
+		UpdatedAt:            now,
 	}
 }
+func extractTargetClassification(best selectionengine.GroupCandidate, rawRows []map[string]any) string {
+	for _, key := range []string{"red", "green", "blue"} {
+		ch, ok := best.Channels[key]
+		if !ok || ch.Row == nil {
+			continue
+		}
+		if v := firstNonEmptyString(ch.Row,
+			"target_classification",
+			"targetClassification",
+			"target_class",
+			"targetClass",
+		); v != "" {
+			return v
+		}
+	}
 
+	for _, row := range rawRows {
+		if v := firstNonEmptyString(row,
+			"target_classification",
+			"targetClassification",
+			"target_class",
+			"targetClass",
+		); v != "" {
+			return v
+		}
+	}
+
+	return ""
+}
+
+func firstNonEmptyString(row map[string]any, keys ...string) string {
+	for _, key := range keys {
+		v := strings.TrimSpace(asString(row[key]))
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
 func qualityLabel(c selectionengine.GroupCandidate) string {
 	if c.SelectionMode == "single_filter_fallback" {
 		return "single_filter"
