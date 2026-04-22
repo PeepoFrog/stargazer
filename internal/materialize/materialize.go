@@ -31,18 +31,18 @@ type Dependencies struct {
 	DownloadByDataURI func(client *http.Client, dataURI, savePath, label string) error
 }
 
-func MustMaterializeChannels(
+func MaterializeChannels(
 	client *http.Client,
 	fitsDir string,
 	candidate Candidate,
 	deps Dependencies,
-) Result {
+) (Result, error) {
 	if deps.DownloadByDataURI == nil {
-		log.Fatal("materialize: DownloadByDataURI dependency is nil")
+		return Result{}, fmt.Errorf("materialize: DownloadByDataURI dependency is nil")
 	}
 
 	if err := os.MkdirAll(fitsDir, 0o755); err != nil {
-		log.Fatalf("mkdir fits dir: %v", err)
+		return Result{}, fmt.Errorf("mkdir fits dir: %w", err)
 	}
 
 	files := map[string]string{}
@@ -51,10 +51,10 @@ func MustMaterializeChannels(
 	for _, channelName := range []string{"red", "green", "blue"} {
 		choice, ok := candidate.Channels[channelName]
 		if !ok {
-			log.Fatalf("missing %s channel in candidate", channelName)
+			return Result{}, fmt.Errorf("missing %s channel in candidate", channelName)
 		}
 		if choice.DataURL == "" {
-			log.Fatalf("empty dataURL for %s channel using filter %s", channelName, choice.ActualFilter)
+			return Result{}, fmt.Errorf("empty dataURL for %s channel using filter %s", channelName, choice.ActualFilter)
 		}
 
 		filename := filepath.Base(choice.DataURL)
@@ -83,7 +83,7 @@ func MustMaterializeChannels(
 
 			label := fmt.Sprintf("%s/%s", channelName, choice.ActualFilter)
 			if err := deps.DownloadByDataURI(client, choice.DataURL, savePath, label); err != nil {
-				log.Fatalf("download %s channel (%s): %v", channelName, choice.ActualFilter, err)
+				return Result{}, fmt.Errorf("download %s channel (%s): %w", channelName, choice.ActualFilter, err)
 			}
 		}
 
@@ -93,11 +93,25 @@ func MustMaterializeChannels(
 			"actual_filter":    choice.ActualFilter,
 			"fallback_rank":    choice.FallbackRank,
 			"product_kind":     choice.ProductKind,
+			"data_url":         choice.DataURL,
 		}
 	}
 
 	return Result{
 		Files:            files,
 		SelectedChannels: selectedChannels,
+	}, nil
+}
+
+func MustMaterializeChannels(
+	client *http.Client,
+	fitsDir string,
+	candidate Candidate,
+	deps Dependencies,
+) Result {
+	result, err := MaterializeChannels(client, fitsDir, candidate, deps)
+	if err != nil {
+		log.Fatal(err)
 	}
+	return result
 }

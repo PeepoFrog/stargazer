@@ -520,7 +520,7 @@ func nextQuality(current string) string {
 }
 
 func buildRenderCommand(source, target string) string {
-	return fmt.Sprintf(`go run ./main.go -source %s -target %q`, source, target)
+	return fmt.Sprintf(`go run ./cmd/rendercandidate -source %s -target %q`, source, target)
 }
 
 func displayValue(v string) string {

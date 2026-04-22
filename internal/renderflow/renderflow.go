@@ -29,11 +29,18 @@ type Preset struct {
 	BHigh float64 `json:"b_high"`
 	BGain float64 `json:"b_gain"`
 }
+
 type GrayImage struct {
 	W      int
 	H      int
 	Pix    []float64
 	Sorted []float64
+}
+
+type RenderInfo struct {
+	OriginalShapes map[string]string `json:"original_shapes"`
+	FinalShape     string            `json:"final_shape"`
+	ShapeAdjusted  bool              `json:"shape_adjusted"`
 }
 
 func readPixelsAsFloat64(img fitsio.Image, n int) ([]float64, error) {
@@ -100,6 +107,7 @@ func readPixelsAsFloat64(img fitsio.Image, n int) ([]float64, error) {
 		return nil, fmt.Errorf("unsupported BITPIX=%d", bitpix)
 	}
 }
+
 func ReadFirst2DImage(path string) (GrayImage, error) {
 	fh, err := os.Open(path)
 	if err != nil {
@@ -156,46 +164,116 @@ func ReadFirst2DImage(path string) (GrayImage, error) {
 
 	return GrayImage{}, errors.New("no 2D image HDU found")
 }
+
+func RenderAndSave(
+	materialized materialize.Result,
+	preset Preset,
+	layout outputlayout.Layout,
+) (RenderInfo, error) {
+	redImg, err := ReadFirst2DImage(materialized.Files["red"])
+	if err != nil {
+		return RenderInfo{}, fmt.Errorf("read red fits: %w", err)
+	}
+
+	greenImg, err := ReadFirst2DImage(materialized.Files["green"])
+	if err != nil {
+		return RenderInfo{}, fmt.Errorf("read green fits: %w", err)
+	}
+
+	blueImg, err := ReadFirst2DImage(materialized.Files["blue"])
+	if err != nil {
+		return RenderInfo{}, fmt.Errorf("read blue fits: %w", err)
+	}
+
+	info := RenderInfo{
+		OriginalShapes: map[string]string{
+			"red":   fmt.Sprintf("%dx%d", redImg.W, redImg.H),
+			"green": fmt.Sprintf("%dx%d", greenImg.W, greenImg.H),
+			"blue":  fmt.Sprintf("%dx%d", blueImg.W, blueImg.H),
+		},
+	}
+
+	var adjusted bool
+	redImg, greenImg, blueImg, adjusted = harmonizeToCommonShape(redImg, greenImg, blueImg)
+	info.ShapeAdjusted = adjusted
+	info.FinalShape = fmt.Sprintf("%dx%d", redImg.W, redImg.H)
+
+	if err := os.MkdirAll(layout.RenderDir, 0o755); err != nil {
+		return RenderInfo{}, fmt.Errorf("mkdir render dir: %w", err)
+	}
+
+	img, err := RenderPreset(redImg, greenImg, blueImg, preset)
+	if err != nil {
+		return RenderInfo{}, fmt.Errorf("render preset: %w", err)
+	}
+
+	if err := SavePNG(layout.ImagePath, img); err != nil {
+		return RenderInfo{}, fmt.Errorf("save png: %w", err)
+	}
+
+	return info, nil
+}
+
 func MustRenderAndSave(
 	materialized materialize.Result,
 	preset Preset,
 	layout outputlayout.Layout,
 ) {
-	redImg, err := ReadFirst2DImage(materialized.Files["red"])
-	if err != nil {
-		log.Fatalf("read red fits: %v", err)
+	if _, err := RenderAndSave(materialized, preset, layout); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func harmonizeToCommonShape(red, green, blue GrayImage) (GrayImage, GrayImage, GrayImage, bool) {
+	if red.W == green.W && red.H == green.H && red.W == blue.W && red.H == blue.H {
+		return red, green, blue, false
 	}
 
-	greenImg, err := ReadFirst2DImage(materialized.Files["green"])
-	if err != nil {
-		log.Fatalf("read green fits: %v", err)
+	minW := minInt(red.W, minInt(green.W, blue.W))
+	minH := minInt(red.H, minInt(green.H, blue.H))
+
+	red = cropCenter(red, minW, minH)
+	green = cropCenter(green, minW, minH)
+	blue = cropCenter(blue, minW, minH)
+
+	return red, green, blue, true
+}
+
+func cropCenter(src GrayImage, targetW, targetH int) GrayImage {
+	if src.W == targetW && src.H == targetH {
+		return src
 	}
 
-	blueImg, err := ReadFirst2DImage(materialized.Files["blue"])
-	if err != nil {
-		log.Fatalf("read blue fits: %v", err)
+	startX := 0
+	startY := 0
+	if src.W > targetW {
+		startX = (src.W - targetW) / 2
+	}
+	if src.H > targetH {
+		startY = (src.H - targetH) / 2
 	}
 
-	if redImg.W != greenImg.W || redImg.H != greenImg.H || redImg.W != blueImg.W || redImg.H != blueImg.H {
-		log.Fatalf(
-			"shape mismatch: red=%dx%d green=%dx%d blue=%dx%d",
-			redImg.W, redImg.H,
-			greenImg.W, greenImg.H,
-			blueImg.W, blueImg.H,
-		)
+	outPix := make([]float64, 0, targetW*targetH)
+	for y := 0; y < targetH; y++ {
+		srcY := startY + y
+		rowStart := srcY*src.W + startX
+		rowEnd := rowStart + targetW
+		outPix = append(outPix, src.Pix[rowStart:rowEnd]...)
 	}
 
-	if err := os.MkdirAll(layout.RenderDir, 0o755); err != nil {
-		log.Fatalf("mkdir render dir: %v", err)
+	sortedVals := make([]float64, 0, len(outPix))
+	for _, v := range outPix {
+		if !math.IsNaN(v) && !math.IsInf(v, 0) {
+			sortedVals = append(sortedVals, v)
+		}
 	}
+	sort.Float64s(sortedVals)
 
-	img, err := RenderPreset(redImg, greenImg, blueImg, preset)
-	if err != nil {
-		log.Fatalf("render preset: %v", err)
-	}
-
-	if err := SavePNG(layout.ImagePath, img); err != nil {
-		log.Fatalf("save png: %v", err)
+	return GrayImage{
+		W:      targetW,
+		H:      targetH,
+		Pix:    outPix,
+		Sorted: sortedVals,
 	}
 }
 
@@ -220,6 +298,7 @@ func percentileFromSorted(sortedVals []float64, p float64) float64 {
 	t := pos - float64(lo)
 	return sortedVals[lo]*(1-t) + sortedVals[hi]*t
 }
+
 func RenderPreset(red, green, blue GrayImage, p Preset) (*image.RGBA, error) {
 	if red.W != green.W || red.W != blue.W || red.H != green.H || red.H != blue.H {
 		return nil, errors.New("shape mismatch")
@@ -317,4 +396,11 @@ func SavePNG(path string, img image.Image) error {
 	}
 	defer f.Close()
 	return png.Encode(f, img)
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
