@@ -6,5 +6,9 @@
 ## Usage example
 
 ```
-go run main.go -source jwst -target "NGC 3132"
+go run ./cmd/sync -source jwst
+
+go run ./cmd/tui -source jwst
+
+go run ./cmd/rendercandidate -source jwst -target "NGC 3132"
 ```
