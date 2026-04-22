@@ -48,6 +48,8 @@ func MaterializeChannels(
 	files := map[string]string{}
 	selectedChannels := map[string]any{}
 
+	log.Printf("Materialize target=%q fits_dir=%q", candidate.TargetName, fitsDir)
+
 	for _, channelName := range []string{"red", "green", "blue"} {
 		choice, ok := candidate.Channels[channelName]
 		if !ok {
@@ -59,6 +61,17 @@ func MaterializeChannels(
 
 		filename := filepath.Base(choice.DataURL)
 		savePath := filepath.Join(fitsDir, filename)
+
+		log.Printf(
+			"Channel debug channel=%s requested=%s actual=%s fallback_rank=%d product_kind=%s data_url=%q save_path=%q",
+			channelName,
+			choice.RequestedFilter,
+			choice.ActualFilter,
+			choice.FallbackRank,
+			choice.ProductKind,
+			choice.DataURL,
+			savePath,
+		)
 
 		if deps.FileExists != nil && deps.FileExists(savePath) {
 			log.Printf(
@@ -83,7 +96,13 @@ func MaterializeChannels(
 
 			label := fmt.Sprintf("%s/%s", channelName, choice.ActualFilter)
 			if err := deps.DownloadByDataURI(client, choice.DataURL, savePath, label); err != nil {
-				return Result{}, fmt.Errorf("download %s channel (%s): %w", channelName, choice.ActualFilter, err)
+				return Result{}, fmt.Errorf(
+					"download %s channel (%s) data_url=%q: %w",
+					channelName,
+					choice.ActualFilter,
+					choice.DataURL,
+					err,
+				)
 			}
 		}
 

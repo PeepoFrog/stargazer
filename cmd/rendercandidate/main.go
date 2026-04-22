@@ -55,6 +55,33 @@ func main() {
 		log.Fatalf("candidate not found for source=%q target=%q", *source, *target)
 	}
 
+	log.Printf(
+		"Candidate debug source=%q target=%q classification=%q obs_id=%q obs_key=%q quality=%q product=%q",
+		rec.Source,
+		rec.TargetName,
+		rec.TargetClassification,
+		rec.ObservationID,
+		rec.ObservationKey,
+		rec.Quality,
+		rec.ProductKind,
+	)
+
+	log.Printf(
+		"Candidate URLs red_filter=%q red_url=%q",
+		rec.RedFilter,
+		rec.RedDataURL,
+	)
+	log.Printf(
+		"Candidate URLs green_filter=%q green_url=%q",
+		rec.GreenFilter,
+		rec.GreenDataURL,
+	)
+	log.Printf(
+		"Candidate URLs blue_filter=%q blue_url=%q",
+		rec.BlueFilter,
+		rec.BlueDataURL,
+	)
+
 	preset := renderflow.Preset{
 		Name:  *presetName,
 		Mode:  *mode,
@@ -72,6 +99,18 @@ func main() {
 	req, err := runflow.BuildRequestFromCatalogCandidate(*source, rec, *outDir, preset)
 	if err != nil {
 		log.Fatalf("build run request: %v", err)
+	}
+
+	for _, key := range []string{"red", "green", "blue"} {
+		ch := req.Channels[key]
+		log.Printf(
+			"RunRequest channel=%s requested=%q actual=%q product=%q data_url=%q",
+			key,
+			ch.RequestedFilter,
+			ch.ActualFilter,
+			ch.ProductKind,
+			ch.DataURL,
+		)
 	}
 
 	result, err := runflow.RunCandidate(req)
